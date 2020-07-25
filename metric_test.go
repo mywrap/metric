@@ -58,7 +58,7 @@ func TestMetric(t *testing.T) {
 			go func(i int) {
 				defer wg.Add(-1)
 				m.Count(c.path)
-				m.Duration(c.path, time.Duration(c.array[i]))
+				m.Duration(c.path, time.Duration(c.array[i])*time.Millisecond)
 			}(i)
 		}
 		wg.Wait()
@@ -70,10 +70,28 @@ func TestMetric(t *testing.T) {
 	if a[0].Key != path0 || a[1].Key != path1 {
 		t.Error(a)
 	}
-	t.Log(a[0])
-	if a[0].Percentile68 < 683 ||
-		a[0].Percentile95 < 955 ||
-		a[0].Percentile997 < 998 {
-		t.Error()
+	expectation := PG1{P0: 0.001, P25: 0.25, P50: 0.5, P75: 0.75, P100: 1}
+	if a[0].RequestCount != 2000 || a[0].PercentilesG1 != expectation {
+		t.Error(a[0])
+	}
+	expectation2 := PG2{P90: 3.8, P95: 3.9, P99: 3.98, P995: 3.99, P999: 3.998}
+	if a[1].RequestCount != 1000 || a[1].PercentilesG2 != expectation2 {
+		t.Error(a[1])
+	}
+}
+
+func TestMemoryMetric_Reset(t *testing.T) {
+	m := NewMemoryMetric()
+	m.Count("key0")
+	m.Duration("key0", 1*time.Second)
+	m.Count("key0")
+	m.Duration("key0", 2*time.Second)
+	m.Reset()
+	m.Count("key0")
+	m.Duration("key0", 4*time.Second)
+	rows := m.GetCurrentMetric()
+	if rows[0].RequestCount != 1 ||
+		rows[0].AverageSeconds != 4 {
+		t.Error(rows[0])
 	}
 }

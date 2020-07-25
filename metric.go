@@ -1,5 +1,6 @@
 // Package metric is used for observing request count and duration,
-// it can calculate percentile of durations, default output percentile for 68–95–99.7
+// it can calculate duration percentile in time complexity log(nRequests),
+// default output durations at 0-25-50-75-100-90-95-99-99.5-99.9 percentile.
 package metric
 
 import (
@@ -15,59 +16,88 @@ import (
 // Metric monitors number of requests, duration of requests,
 // Metric's methods must be safe for concurrent calls
 type Metric interface {
-	// Count increases count value of the key by 1
+	// Count increases key's counter by 1
 	Count(key string)
-	// Count increases total duration of the key by dur,
+	// Duration increases key's total duration by dur,
 	// the dur will be saved in a order statistic tree
 	Duration(key string, dur time.Duration)
 	// Reset set all count and duration of requests to 0,
-	// In a database implement, you can persist the prevMetric
+	// In a database implement, you can persist the metric before resetting
 	Reset()
 
-	// returns an array of MetricRowString
+	GetLastReset() time.Time
+	// each row is corresponding to a metric key
 	GetCurrentMetric() []RowDisplay
 	// percentile is in [0, 1]
 	GetDurationPercentile(key string, percentile float64) time.Duration
-	// returns an array of MetricRowString
-	GetPrevMetric() []RowDisplay
 }
 
-// RowDisplay is human readable metric data of a key
+// RowDisplay is human readable metric of a key,
+// durations are measured in seconds, rounded to 3 decimal place.
 type RowDisplay struct {
 	// example of Key: http path_method
-	Key             string
-	Count           int
-	TotalDuration   time.Duration
-	AverageDuration time.Duration
-	Percentile68    time.Duration
-	Percentile95    time.Duration
-	Percentile997   time.Duration
+	Key            string
+	RequestCount   int
+	AverageSeconds float64
+	PercentilesG1  PG1
+	PercentilesG2  PG2
 }
 
-// MemoryMetric implements Metric interface,
-// this struct's methods is safe for concurrent calls
+// PG1 percentiles group general
+type PG1 struct {
+	P0   float64
+	P25  float64
+	P50  float64
+	P75  float64
+	P100 float64
+}
+
+// PG2 percentiles group high
+type PG2 struct {
+	P90  float64
+	P95  float64
+	P99  float64
+	P995 float64
+	P999 float64
+}
+
+func (r RowDisplay) String() string {
+	return fmt.Sprintf(
+		"key: %v, count: %v, aveSecs: %v, percentiles: %#v, %#v",
+		r.Key, r.RequestCount, r.AverageSeconds,
+		r.PercentilesG1, r.PercentilesG2)
+}
+
+type SortByKey []RowDisplay
+
+func (h SortByKey) Len() int           { return len(h) }
+func (h SortByKey) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h SortByKey) Less(i, j int) bool { return h[i].Key < h[j].Key }
+
+type SortByAveDur []RowDisplay
+
+func (h SortByAveDur) Len() int           { return len(h) }
+func (h SortByAveDur) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h SortByAveDur) Less(i, j int) bool { return h[i].AverageSeconds > h[j].AverageSeconds }
+
+//
+//
+//
+
+// MemoryMetric implements Metric interface
 type MemoryMetric struct {
-	current map[string]*Row
-	prev    map[string]*Row
+	lastReset time.Time
+	current   map[string]*Row
 	*sync.Mutex
 }
 
-// Row is a memory representation of RowDisplay
-type Row struct {
-	Count         int
-	TotalDuration time.Duration
-	Durations     *llrb.LLRB
-	*sync.Mutex
-}
-
-// NewMemoryMetric returns a memory implement of Metric interface
+// NewMemoryMetric returns an in-memory implementation of Metric interface
 func NewMemoryMetric() *MemoryMetric {
-	ret := &MemoryMetric{
-		prev:    make(map[string]*Row),
-		current: make(map[string]*Row),
-		Mutex:   &sync.Mutex{},
+	return &MemoryMetric{
+		lastReset: time.Now(),
+		current:   make(map[string]*Row),
+		Mutex:     &sync.Mutex{},
 	}
-	return ret
 }
 
 func (m *MemoryMetric) getRow(key string) *Row {
@@ -98,26 +128,20 @@ func (m *MemoryMetric) Duration(key string, dur time.Duration) {
 
 func (m *MemoryMetric) Reset() {
 	m.Lock()
-	m.prev = m.current
+	m.lastReset = time.Now()
 	m.current = make(map[string]*Row)
 	m.Unlock()
+}
+
+func (m *MemoryMetric) GetLastReset() time.Time {
+	return m.lastReset
 }
 
 func (m *MemoryMetric) GetCurrentMetric() []RowDisplay {
 	ret := make([]RowDisplay, 0)
 	m.Lock()
 	for key, row := range m.current {
-		ret = append(ret, row.Display(key))
-	}
-	m.Unlock()
-	sort.Sort(SortByKey(ret))
-	return ret
-}
-func (m *MemoryMetric) GetPrevMetric() []RowDisplay {
-	ret := make([]RowDisplay, 0)
-	m.Lock()
-	for key, row := range m.prev {
-		ret = append(ret, row.Display(key))
+		ret = append(ret, row.toDisplay(key))
 	}
 	m.Unlock()
 	sort.Sort(SortByKey(ret))
@@ -132,24 +156,48 @@ func (m *MemoryMetric) GetDurationPercentile(key string, percentile float64) tim
 	return ret
 }
 
-func NewMetricRow() *Row {
-	return &Row{
-		Durations: llrb.New(),
-		Mutex:     &sync.Mutex{},
-	}
+// Row is an in-memory representation of RowDisplay
+type Row struct {
+	Count         int
+	TotalDuration time.Duration
+	Durations     *llrb.LLRB
+	*sync.Mutex
 }
 
-func (r Row) Display(key string) RowDisplay {
+func (r Row) toDisplay(key string) RowDisplay {
 	r.Lock()
 	defer r.Unlock()
-	ret := RowDisplay{Key: key, Count: r.Count, TotalDuration: r.TotalDuration}
+	ret := RowDisplay{Key: key, RequestCount: r.Count}
 	if r.Count != 0 {
-		ret.AverageDuration = r.TotalDuration / time.Duration(r.Count)
+		aveDur := r.TotalDuration / time.Duration(r.Count)
+		ret.AverageSeconds = round(aveDur.Seconds())
 	}
-	ret.Percentile68 = calcRowPercentile(r, 0.6827)
-	ret.Percentile95 = calcRowPercentile(r, 0.9545)
-	ret.Percentile997 = calcRowPercentile(r, 0.9973)
+	ret.PercentilesG1.P0 = round(calcRowPercentile(r, 0).Seconds())
+	ret.PercentilesG1.P25 = round(calcRowPercentile(r, .25).Seconds())
+	ret.PercentilesG1.P50 = round(calcRowPercentile(r, .5).Seconds())
+	ret.PercentilesG1.P75 = round(calcRowPercentile(r, .75).Seconds())
+	ret.PercentilesG1.P100 = round(calcRowPercentile(r, 1).Seconds())
+	ret.PercentilesG2.P90 = round(calcRowPercentile(r, .9).Seconds())
+	ret.PercentilesG2.P95 = round(calcRowPercentile(r, .95).Seconds())
+	ret.PercentilesG2.P99 = round(calcRowPercentile(r, .99).Seconds())
+	ret.PercentilesG2.P995 = round(calcRowPercentile(r, .995).Seconds())
+	ret.PercentilesG2.P999 = round(calcRowPercentile(r, .999).Seconds())
 	return ret
+}
+
+// round to 3 decimal place
+func round(f float64) float64 { return math.Round(f*1000) / 1000 }
+
+func NewMetricRow() *Row {
+	return &Row{Durations: llrb.New(), Mutex: &sync.Mutex{}}
+}
+
+// Duration is time_Duration that implements LLRB's Item interface
+type Duration time.Duration
+
+func (d Duration) Less(than llrb.Item) bool {
+	tmp, _ := than.(Duration)
+	return d < tmp
 }
 
 // do not lock row in this func
@@ -162,53 +210,3 @@ func calcRowPercentile(row Row, percentile float64) time.Duration {
 	}
 	return time.Duration(dur)
 }
-
-func (r RowDisplay) String() string {
-	return fmt.Sprintf(
-		"key: %v, count: %v, dur: %v, aveDur: %v, p68: %v, p95: %v, p99.7: %v",
-		r.Key, r.Count, r.TotalDuration, r.AverageDuration,
-		r.Percentile68, r.Percentile95, r.Percentile997)
-}
-
-// RowJsonable because time.Duration json is not readable
-type RowJsonable struct {
-	RequestKey     string
-	Count          int
-	AverageSeconds float64
-	TotalSeconds   float64
-	Percentile68   float64
-	Percentile95   float64
-	Percentile997  float64
-}
-
-func (r RowDisplay) ToRowJsonable() RowJsonable {
-	return RowJsonable{
-		RequestKey:     r.Key,
-		Count:          r.Count,
-		AverageSeconds: r.AverageDuration.Seconds(),
-		TotalSeconds:   r.TotalDuration.Seconds(),
-		Percentile68:   r.Percentile68.Seconds(),
-		Percentile95:   r.Percentile95.Seconds(),
-		Percentile997:  r.Percentile997.Seconds(),
-	}
-}
-
-type SortByKey []RowDisplay
-
-func (h SortByKey) Len() int           { return len(h) }
-func (h SortByKey) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
-func (h SortByKey) Less(i, j int) bool { return h[i].Key < h[j].Key }
-
-// Duration is time_Duration with method Less
-type Duration time.Duration
-
-func (d Duration) Less(than llrb.Item) bool {
-	tmp, _ := than.(Duration)
-	return d < tmp
-}
-
-type SortByAveDur []RowDisplay
-
-func (h SortByAveDur) Len() int           { return len(h) }
-func (h SortByAveDur) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
-func (h SortByAveDur) Less(i, j int) bool { return h[i].AverageDuration > h[j].AverageDuration }
