@@ -1,6 +1,7 @@
 package metric
 
 import (
+	"fmt"
 	"math/rand"
 	"sync"
 	"testing"
@@ -94,4 +95,31 @@ func TestMemoryMetric_Reset(t *testing.T) {
 		rows[0].AverageSeconds != 4 {
 		t.Error(rows[0])
 	}
+}
+
+func BenchmarkMemoryMetric_Duration(b *testing.B) {
+	m := NewMemoryMetric()
+	for i := 0; i < b.N; i++ {
+		m.Duration(
+			fmt.Sprintf("key%v", rand.Intn(50)),
+			time.Duration(rand.Intn(b.N))*time.Millisecond,
+		)
+	}
+	rows := m.GetCurrentMetric()
+	for _, row := range rows {
+		_ = row
+		//b.Log(row)
+	}
+}
+
+func BenchmarkMemoryMetric_Duration2(b *testing.B) {
+	m := NewMemoryMetric()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() { // The loop body is executed b.N times in goroutines
+			m.Duration(
+				fmt.Sprintf("key%v", rand.Intn(50)),
+				time.Duration(rand.Intn(b.N))*time.Millisecond,
+			)
+		}
+	})
 }
