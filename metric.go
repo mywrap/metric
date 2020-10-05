@@ -100,6 +100,7 @@ func NewMemoryMetric() *MemoryMetric {
 	}
 }
 
+// create new row if not existed
 func (m *MemoryMetric) getRow(key string) *Row {
 	m.Lock()
 	row, found := m.current[key]
@@ -151,7 +152,7 @@ func (m *MemoryMetric) GetCurrentMetric() []RowDisplay {
 func (m *MemoryMetric) GetDurationPercentile(key string, percentile float64) time.Duration {
 	row := m.getRow(key)
 	row.Lock()
-	ret := calcRowPercentile(*row, percentile)
+	ret := calcRowPercentile(row, percentile)
 	row.Unlock()
 	return ret
 }
@@ -164,7 +165,7 @@ type Row struct {
 	*sync.Mutex
 }
 
-func (r Row) toDisplay(key string) RowDisplay {
+func (r *Row) toDisplay(key string) RowDisplay {
 	r.Lock()
 	defer r.Unlock()
 	ret := RowDisplay{Key: key, RequestCount: r.Count}
@@ -201,7 +202,7 @@ func (d Duration) Less(than llrb.Item) bool {
 }
 
 // do not lock row in this func
-func calcRowPercentile(row Row, percentile float64) time.Duration {
+func calcRowPercentile(row *Row, percentile float64) time.Duration {
 	rank := int(math.Ceil(percentile * float64(row.Durations.Len())))
 	item := row.Durations.GetByRank(rank)
 	dur, ok := item.(Duration)

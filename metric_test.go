@@ -9,7 +9,7 @@ import (
 )
 
 func TestCalcPercentile(t *testing.T) {
-	a := *NewMetricRow()
+	a := NewMetricRow()
 	for i := 1; i <= 100; i++ {
 		a.Durations.InsertNoReplace(Duration(i))
 	}
@@ -28,8 +28,10 @@ func TestCalcPercentile(t *testing.T) {
 			t.Errorf("CalcPercentile %v: expect %v, reality %v", i, c.expect, reality)
 		}
 	}
-	// try empty row
-	if calcRowPercentile(*NewMetricRow(), 0.5) != 0 {
+}
+
+func TestCalcPercentileEmpty(t *testing.T) {
+	if calcRowPercentile(NewMetricRow(), 0.5) != 0 {
 		t.Error("try empty row")
 	}
 }
