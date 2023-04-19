@@ -39,35 +39,24 @@ type RowDisplay struct {
 	Key            string
 	RequestCount   int
 	AverageSeconds float64
-	PercentilesG1  PG1
-	PercentilesG2  PG2
-}
-
-// PG1 percentiles group general
-type PG1 struct {
-	P0   float64
-	P25  float64
-	P50  float64
-	P75  float64
-	P100 float64
-}
-
-// PG2 percentiles group high
-type PG2 struct {
-	P90  float64
-	P95  float64
-	P99  float64
-	P995 float64
-	P999 float64
+	Percentiles    struct {
+		P0   float64 // min duration, best
+		P25  float64 // 25 percentile
+		P50  float64 // median
+		P75  float64
+		P90  float64
+		P99  float64
+		P100 float64 // max duration, can be infinity, so average is not a good metric
+	}
 }
 
 func (r RowDisplay) String() string {
 	return fmt.Sprintf(
-		"key: %v, count: %v, aveSecs: %v, percentiles: %#v, %#v",
-		r.Key, r.RequestCount, r.AverageSeconds,
-		r.PercentilesG1, r.PercentilesG2)
+		"key: %v, count: %v, aveSecs: %v, percentiles: %+v",
+		r.Key, r.RequestCount, r.AverageSeconds, r.Percentiles)
 }
 
+// keys alphabet order
 type SortByKey []RowDisplay
 
 func (h SortByKey) Len() int           { return len(h) }
@@ -88,7 +77,7 @@ func (h SortByAveDur) Less(i, j int) bool { return h[i].AverageSeconds > h[j].Av
 type MemoryMetric struct {
 	lastReset time.Time
 	current   map[string]*Row
-	*sync.Mutex
+	mutex     *sync.Mutex
 }
 
 // NewMemoryMetric returns an in-memory implementation of Metric interface
@@ -96,19 +85,19 @@ func NewMemoryMetric() *MemoryMetric {
 	return &MemoryMetric{
 		lastReset: time.Now(),
 		current:   make(map[string]*Row),
-		Mutex:     &sync.Mutex{},
+		mutex:     &sync.Mutex{},
 	}
 }
 
 // create new row if not existed
 func (m *MemoryMetric) getRow(key string) *Row {
-	m.Lock()
+	m.mutex.Lock()
 	row, found := m.current[key]
 	if !found {
 		m.current[key] = NewMetricRow()
 		row = m.current[key]
 	}
-	m.Unlock()
+	m.mutex.Unlock()
 	return row
 }
 
@@ -128,23 +117,25 @@ func (m *MemoryMetric) Duration(key string, dur time.Duration) {
 }
 
 func (m *MemoryMetric) Reset() {
-	m.Lock()
+	m.mutex.Lock()
 	m.lastReset = time.Now()
 	m.current = make(map[string]*Row)
-	m.Unlock()
+	m.mutex.Unlock()
 }
 
 func (m *MemoryMetric) GetLastReset() time.Time {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
 	return m.lastReset
 }
 
 func (m *MemoryMetric) GetCurrentMetric() []RowDisplay {
 	ret := make([]RowDisplay, 0)
-	m.Lock()
+	m.mutex.Lock()
 	for key, row := range m.current {
 		ret = append(ret, row.toDisplay(key))
 	}
-	m.Unlock()
+	m.mutex.Unlock()
 	sort.Sort(SortByKey(ret))
 	return ret
 }
@@ -160,7 +151,7 @@ func (m *MemoryMetric) GetDurationPercentile(key string, percentile float64) tim
 // Row is an in-memory representation of RowDisplay
 type Row struct {
 	Count         int
-	TotalDuration time.Duration
+	TotalDuration time.Duration // TODO: handle int64 overflow
 	Durations     *llrb.LLRB
 	*sync.Mutex
 }
@@ -173,16 +164,13 @@ func (r *Row) toDisplay(key string) RowDisplay {
 		aveDur := r.TotalDuration / time.Duration(r.Count)
 		ret.AverageSeconds = round(aveDur.Seconds())
 	}
-	ret.PercentilesG1.P0 = round(calcRowPercentile(r, 0).Seconds())
-	ret.PercentilesG1.P25 = round(calcRowPercentile(r, .25).Seconds())
-	ret.PercentilesG1.P50 = round(calcRowPercentile(r, .5).Seconds())
-	ret.PercentilesG1.P75 = round(calcRowPercentile(r, .75).Seconds())
-	ret.PercentilesG1.P100 = round(calcRowPercentile(r, 1).Seconds())
-	ret.PercentilesG2.P90 = round(calcRowPercentile(r, .9).Seconds())
-	ret.PercentilesG2.P95 = round(calcRowPercentile(r, .95).Seconds())
-	ret.PercentilesG2.P99 = round(calcRowPercentile(r, .99).Seconds())
-	ret.PercentilesG2.P995 = round(calcRowPercentile(r, .995).Seconds())
-	ret.PercentilesG2.P999 = round(calcRowPercentile(r, .999).Seconds())
+	ret.Percentiles.P0 = round(calcRowPercentile(r, 0).Seconds())
+	ret.Percentiles.P25 = round(calcRowPercentile(r, .25).Seconds())
+	ret.Percentiles.P50 = round(calcRowPercentile(r, .5).Seconds())
+	ret.Percentiles.P75 = round(calcRowPercentile(r, .75).Seconds())
+	ret.Percentiles.P90 = round(calcRowPercentile(r, .9).Seconds())
+	ret.Percentiles.P99 = round(calcRowPercentile(r, .99).Seconds())
+	ret.Percentiles.P100 = round(calcRowPercentile(r, 1).Seconds())
 	return ret
 }
 

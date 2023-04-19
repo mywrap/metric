@@ -23,10 +23,10 @@ func main() {
 	}
 	nKeys := len(keysList)
 	rand.Seed(time.Now().UnixNano())
-
+	client := http.Client{Timeout: 10 * time.Second}
 	m := metric.NewMemoryMetric()
 	wg := &sync.WaitGroup{}
-	for i := 0; i < 1000; i++ {
+	for i := 0; i < 100; i++ {
 		if i%20 == 0 {
 			log.Println("i:", i)
 		}
@@ -36,7 +36,7 @@ func main() {
 		go func() {
 			defer wg.Add(-1)
 			beginT := time.Now()
-			resp, err := http.Get(keys[key])
+			resp, err := client.Get(keys[key])
 			m.Count(key)
 			m.Duration(key, time.Since(beginT))
 			if err != nil {

@@ -21,7 +21,7 @@ func TestCalcPercentile(t *testing.T) {
 		{0.9545, 96},
 		{0.9973, 100},
 		{0.99, 99},
-		{68, 100},
+		{68, 100}, // percentile 68 equivalent to 1, test overflow
 	} {
 		reality := calcRowPercentile(a, c.percentile)
 		if reality != c.expect {
@@ -36,7 +36,7 @@ func TestCalcPercentileEmpty(t *testing.T) {
 	}
 }
 
-func TestMetric(t *testing.T) {
+func TestMemoryMetric(t *testing.T) {
 	m := NewMemoryMetric()
 	wg := &sync.WaitGroup{}
 	path0, path1 := "path0", "path1"
@@ -73,13 +73,19 @@ func TestMetric(t *testing.T) {
 	if a[0].Key != path0 || a[1].Key != path1 {
 		t.Error(a)
 	}
-	expectation := PG1{P0: 0.001, P25: 0.25, P50: 0.5, P75: 0.75, P100: 1}
-	if a[0].RequestCount != 2000 || a[0].PercentilesG1 != expectation {
-		t.Error(a[0])
+	// a[0] durations: [1, 1, 2, 2, 3, 3, .., 1000, 1000] milliseconds
+	if a[0].Percentiles.P0 != 0.001 || a[0].Percentiles.P50 != 0.5 ||
+		a[0].Percentiles.P75 != 0.75 || a[0].Percentiles.P100 != 1 {
+		t.Errorf("error MemoryMetric Percentiles, got: %+v", a[0])
 	}
-	expectation2 := PG2{P90: 3.8, P95: 3.9, P99: 3.98, P995: 3.99, P999: 3.998}
-	if a[1].RequestCount != 1000 || a[1].PercentilesG2 != expectation2 {
-		t.Error(a[1])
+	// a[0] durations: [2002, 2004, 2006, .., 3998, 4000] milliseconds
+	if a[1].Percentiles.P25 != 2.5 || a[1].Percentiles.P90 != 3.8 ||
+		a[1].Percentiles.P99 != 3.98 || a[1].Percentiles.P100 != 4 {
+		t.Errorf("error MemoryMetric Percentiles, got: %+v", a[1])
+	}
+
+	if got, want := m.GetDurationPercentile(path1, 0.99), 3980*time.Millisecond; got != want {
+		t.Errorf("error GetDurationPercentile got %v, want %v", got, want)
 	}
 }
 
@@ -99,6 +105,7 @@ func TestMemoryMetric_Reset(t *testing.T) {
 	}
 }
 
+// CPU i7-1260P 1170 ns/op
 func BenchmarkMemoryMetric_Duration(b *testing.B) {
 	m := NewMemoryMetric()
 	for i := 0; i < b.N; i++ {
@@ -114,6 +121,7 @@ func BenchmarkMemoryMetric_Duration(b *testing.B) {
 	}
 }
 
+// CPU i7-1260P 774.3 ns/op
 func BenchmarkMemoryMetric_Duration2(b *testing.B) {
 	m := NewMemoryMetric()
 	b.RunParallel(func(pb *testing.PB) {
