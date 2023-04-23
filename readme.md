@@ -13,8 +13,7 @@ Wrapped [Go order statistic tree](https://github.com/daominah/GoLLRB).
 
   ````go
   metric := NewMemoryMetric()
-  func EmbedHandler(method string, path string, handler http.HandlerFunc) (
-  http.HandlerFunc) {
+  func HandlerWithMetric(method string, path string, handler http.HandlerFunc) http.HandlerFunc {
       metricKey := fmt.Sprintf("%v_%v", path, method)
       return func(w http.ResponseWriter, r *http.Request) {
           metric.Count(metricKey)
@@ -27,22 +26,17 @@ Wrapped [Go order statistic tree](https://github.com/daominah/GoLLRB).
   Detail in [httpsvr.go](
   https://github.com/mywrap/httpsvr/blob/master/httpsvr.go).
 
-* Example 2: observing requests to websites [example.go](
-  ./example/example.go):
+* Example 2: observing requests to websitesin [example.go](example/example.go):
   
   ````go
-  key: facebook.com, count: 229, aveSecs: 0.294, percentiles:
-      metric.PG1{P0:0.255, P25:0.278, P50:0.286, P75:0.297, P100:0.683},
-      metric.PG2{P90:0.313, P95:0.334, P99:0.54, P995:0.663, P999:0.683}
-  key: github.com, count: 245, aveSecs: 0.163, percentiles:
-      metric.PG1{P0:0.124, P25:0.142, P50:0.16, P75:0.177, P100:0.294},
-      metric.PG2{P90:0.197, P95:0.21, P99:0.258, P995:0.291, P999:0.294}
-  key: golang.org, count: 273, aveSecs: 0.198, percentiles:
-      metric.PG1{P0:0.189, P25:0.191, P50:0.193, P75:0.195, P100:0.693},
-      metric.PG2{P90:0.198, P95:0.202, P99:0.359, P995:0.399, P999:0.693}
-  key: vnexpress.net, count: 253, aveSecs: 0.027, percentiles:
-      metric.PG1{P0:0.022, P25:0.024, P50:0.024, P75:0.027, P100:0.137},
-      metric.PG2{P90:0.03, P95:0.034, P99:0.109, P995:0.13, P999:0.137}
+  facebook.com, count: 24, aveSecs: 0.345, percentiles:
+  	{P0:0.301 P25:0.305 P50:0.31 P75:0.334 P90:0.482 P99:0.572 P100:0.572}
+  github.com, count: 27, aveSecs: 0.101, percentiles:
+  	{P0:0.058 P25:0.059 P50:0.06 P75:0.122 P90:0.205 P99:0.42 P100:0.42}
+  golang.org, count: 21, aveSecs: 0.639, percentiles:
+  	{P0:0.558 P25:0.585 P50:0.596 P75:0.661 P90:0.804 P99:0.887 P100:0.887}
+  vnexpress.net, count: 28, aveSecs: 0.092, percentiles:
+  	{P0:0.051 P25:0.053 P50:0.056 P75:0.06 P90:0.21 P99:0.361 P100:0.361}
   ````
 
 ## Config
